@@ -2,11 +2,13 @@
   "name": "david-gorodensky-site",
   "version": "1.0.0",
   "private": true,
-  "description": "Статический сайт о Давиде Городенском с простым Node.js API для отзывов",
+  "description": "Сайт о Давиде Городенском с Node.js API и базой SQLite для свечей, голосов и отзывов",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "build": "node build.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

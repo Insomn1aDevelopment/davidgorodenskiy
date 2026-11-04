@@ -6,13 +6,17 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { promisify } = require('node:util');
+const { DatabaseSync } = require('node:sqlite');
 
 const gzip = promisify(zlib.gzip);
 const root = __dirname;
-const dataDir = path.join(root, 'data');
-const feedbackFile = path.join(dataDir, 'feedback.json');
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data');
+const dbFile = path.join(dataDir, 'site.db');
+const legacyFeedbackFile = path.join(dataDir, 'feedback.json');
 const maxBodyBytes = 10 * 1024;
 const maxFeedbackLength = 1000;
+const riddleCount = 3; // загадки с двумя версиями, за которые можно голосовать
+const visitorPattern = /^[\w-]{8,64}$/;
 const assets = new Map();
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
@@ -22,8 +26,7 @@ const mimeTypes = new Map([
   ['.woff2', 'font/woff2'], ['.woff', 'font/woff'], ['.txt', 'text/plain; charset=utf-8'],
 ]);
 
-let feedback = [];
-let feedbackWriteQueue = Promise.resolve();
+let db;
 
 function json(res, status, body) {
   const payload = Buffer.from(JSON.stringify(body));
@@ -142,52 +145,118 @@ async function serveStatic(req, res, pathname) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
-async function persistFeedback(entry) {
-  const operation = feedbackWriteQueue.then(async () => {
-    const next = [...feedback, entry];
-    const tempFile = `${feedbackFile}.${process.pid}.tmp`;
-    await fs.writeFile(tempFile, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-    await fs.rename(tempFile, feedbackFile);
-    feedback = next;
-  });
-  feedbackWriteQueue = operation.catch(() => {});
-  return operation;
+function openDatabase() {
+  db = new DatabaseSync(dbFile);
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, message TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS candles (visitor TEXT PRIMARY KEY, lit_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS votes (
+      visitor TEXT NOT NULL,
+      riddle INTEGER NOT NULL CHECK (riddle BETWEEN 0 AND ${riddleCount - 1}),
+      choice INTEGER NOT NULL CHECK (choice IN (0, 1)),
+      voted_at TEXT NOT NULL,
+      PRIMARY KEY (visitor, riddle)
+    );
+  `);
+}
+
+// Отзывы раньше хранились в data/feedback.json — переносим их в базу один раз, пока таблица пуста.
+async function importLegacyFeedback() {
+  if (db.prepare('SELECT COUNT(*) AS n FROM feedback').get().n > 0) return;
+  let saved;
+  try { saved = JSON.parse(await fs.readFile(legacyFeedbackFile, 'utf8')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') console.error('Не удалось прочитать старые отзывы:', error.message);
+    return;
+  }
+  if (!Array.isArray(saved)) return;
+  const insert = db.prepare('INSERT OR IGNORE INTO feedback (id, created_at, message) VALUES (?, ?, ?)');
+  for (const f of saved) if (f && typeof f.message === 'string') insert.run(String(f.id || crypto.randomUUID()), String(f.createdAt || new Date().toISOString()), f.message);
+}
+
+function visitorFrom(value) {
+  return typeof value === 'string' && visitorPattern.test(value) ? value : null;
+}
+
+function candleState(visitor) {
+  return {
+    count: db.prepare('SELECT COUNT(*) AS n FROM candles').get().n,
+    mine: Boolean(visitor && db.prepare('SELECT 1 FROM candles WHERE visitor = ?').get(visitor)),
+  };
+}
+
+function voteState(visitor) {
+  const tally = Array.from({ length: riddleCount }, () => [0, 0]);
+  for (const row of db.prepare('SELECT riddle, choice, COUNT(*) AS n FROM votes GROUP BY riddle, choice').all()) tally[row.riddle][row.choice] = row.n;
+  const mine = Array(riddleCount).fill(null);
+  if (visitor) for (const row of db.prepare('SELECT riddle, choice FROM votes WHERE visitor = ?').all(visitor)) mine[row.riddle] = row.choice;
+  return { tally, mine };
 }
 
 async function handleFeedback(req, res) {
-  try {
-    const body = await readJson(req);
-    const message = typeof body.message === 'string' ? body.message.trim() : '';
-    if (!message) return json(res, 400, { error: 'Напишите отзыв перед отправкой.' });
-    if ([...message].length > maxFeedbackLength) return json(res, 400, { error: 'Отзыв должен быть не длиннее 1000 символов.' });
+  const body = await readJson(req);
+  const message = typeof body.message === 'string' ? body.message.trim() : '';
+  if (!message) return json(res, 400, { error: 'Напишите отзыв перед отправкой.' });
+  if ([...message].length > maxFeedbackLength) return json(res, 400, { error: 'Отзыв должен быть не длиннее 1000 символов.' });
 
-    await persistFeedback({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), message });
-    return json(res, 201, { ok: true, message: 'Спасибо за отзыв.' });
-  } catch (error) {
-    return json(res, error.status || 500, { error: error.status ? error.message : 'Не удалось сохранить отзыв.' });
-  }
+  db.prepare('INSERT INTO feedback (id, created_at, message) VALUES (?, ?, ?)').run(crypto.randomUUID(), new Date().toISOString(), message);
+  return json(res, 201, { ok: true, message: 'Спасибо за отзыв.' });
 }
+
+async function handleCandle(req, res) {
+  const visitor = visitorFrom((await readJson(req)).visitor);
+  if (!visitor) return json(res, 400, { error: 'Некорректный идентификатор посетителя.' });
+  db.prepare('INSERT OR IGNORE INTO candles (visitor, lit_at) VALUES (?, ?)').run(visitor, new Date().toISOString());
+  return json(res, 201, candleState(visitor));
+}
+
+async function handleVote(req, res) {
+  const body = await readJson(req);
+  const visitor = visitorFrom(body.visitor);
+  if (!visitor) return json(res, 400, { error: 'Некорректный идентификатор посетителя.' });
+  if (!Number.isInteger(body.riddle) || body.riddle < 0 || body.riddle >= riddleCount) return json(res, 400, { error: 'Некорректный номер загадки.' });
+  if (body.choice !== 0 && body.choice !== 1) return json(res, 400, { error: 'Некорректная версия.' });
+  db.prepare(`INSERT INTO votes (visitor, riddle, choice, voted_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (visitor, riddle) DO UPDATE SET choice = excluded.choice, voted_at = excluded.voted_at`)
+    .run(visitor, body.riddle, body.choice, new Date().toISOString());
+  return json(res, 201, voteState(visitor));
+}
+
+// Ошибки API превращаются в JSON-ответ; внутренние детали наружу не уходят.
+const apiRoute = fn => async (req, res, url) => {
+  try { return await fn(req, res, url); }
+  catch (error) {
+    if (!error.status) console.error('Ошибка API:', error);
+    return json(res, error.status || 500, { error: error.status ? error.message : 'Не удалось сохранить данные.' });
+  }
+};
+
+const routes = {
+  'GET /api/health': (req, res) => json(res, 200, { status: 'ok' }),
+  'POST /api/feedback': apiRoute(handleFeedback),
+  'GET /api/candles': apiRoute((req, res, url) => json(res, 200, candleState(visitorFrom(url.searchParams.get('visitor'))))),
+  'POST /api/candles': apiRoute(handleCandle),
+  'GET /api/votes': apiRoute((req, res, url) => json(res, 200, voteState(visitorFrom(url.searchParams.get('visitor'))))),
+  'POST /api/votes': apiRoute(handleVote),
+};
 
 async function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { return json(res, 400, { error: 'Некорректный URL.' }); }
 
-  if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok' });
-  if (req.method === 'POST' && url.pathname === '/api/feedback') return handleFeedback(req, res);
+  const route = routes[`${req.method} ${url.pathname}`];
+  if (route) return route(req, res, url);
+  if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Метод не поддерживается.' });
   return serveStatic(req, res, url.pathname);
 }
 
 async function start() {
   await fs.mkdir(dataDir, { recursive: true });
-  try {
-    const saved = JSON.parse(await fs.readFile(feedbackFile, 'utf8'));
-    if (Array.isArray(saved)) feedback = saved;
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error('Не удалось прочитать отзывы:', error.message);
-    await fs.writeFile(feedbackFile, '[]\n', 'utf8');
-  }
+  openDatabase();
+  await importLegacyFeedback();
 
   await cacheAsset(path.join(root, 'index.html'));
   const imageDir = path.join(root, 'img');

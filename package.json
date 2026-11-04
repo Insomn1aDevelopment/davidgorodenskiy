@@ -4,9 +4,11 @@
   "private": true,
   "description": "Сайт о Давиде Городенском",
   "scripts": {
-    "start": "node nigger/server.js"
+    "start": "node site/server.js",
+    "test": "node --test site/server.test.js",
+    "build": "node site/build.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

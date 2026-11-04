@@ -912,7 +912,6 @@ figure{margin:0}
 footer{padding-block:2.5rem 3rem;text-align:center;color:var(--muted);font-size:var(--s-1)}
 footer .wrap{display:grid;gap:.7rem;justify-items:center}
 footer .colophon{font-family:var(--f-body);font-size:1.05rem;color:var(--ink);max-width:52ch}
-footer .end{font-family:var(--f-display);color:var(--accent);font-size:1.3rem;letter-spacing:.3em}
 .scribe{width:min(300px,70%);height:auto;overflow:visible}
 .scribe path{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:0;transition:stroke-dashoffset 2.6s cubic-bezier(.5,0,.2,1) .3s}
 .scribe.pre path{stroke-dashoffset:1;opacity:0}
@@ -1388,7 +1387,6 @@ setTimeout(()=>{r.classList.remove('js-cover');r.classList.add('go')},6000);})()
     <div class="zastavka" aria-hidden="true" style="width:min(420px,100%)"></div>
     <p class="colophon" data-i18n="ft_col">Сия повесть сложена в лето 7534 от сотворения мира (2026), к 700-летию памяти Давида Городенского. Даты и подробности приведены по хроникам; часть сведений остаётся спорной.</p>
     <svg class="scribe" viewBox="0 0 300 60" aria-hidden="true"><path pathLength="1" d="M8 42 C 34 10 48 58 72 30 S 104 14 112 34 S 140 52 160 28 C 170 16 186 20 180 32 S 150 46 206 40 C 226 38 240 30 250 22 C 258 16 268 18 262 26 C 256 34 244 38 292 36"/></svg>
-    <span class="end" data-i18n="ft_end">Аминь</span>
     <a href="#top" data-i18n="ft_top">Наверх</a>
   </div>
 </footer>
@@ -1404,6 +1402,9 @@ const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelecto
 const fadeIn=el=>{if(!el)return;el.classList.remove('fade');void el.offsetWidth;el.classList.add('fade')};
 const NS='http://www.w3.org/2000/svg';
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+/* общая база на сервере: свечи и голоса; без сервера сайт работает как раньше, только на этом экране */
+const api=(p,body)=>fetch('/api/'+p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined).then(r=>r.ok?r.json():Promise.reject(r.status));
+const visitor=(()=>{let v=ls.get('dg-uid');if(!v||!/^[\w-]{8,64}$/.test(v)){v=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2,12));ls.set('dg-uid',v)}return v})();
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* беларускі тэкст для статычных блокаў */
@@ -1513,7 +1514,7 @@ cf_3:'Давыд Гарадзенскі: паходжанне, палітычн�
 cf_4:'Феномен «непераможнага каштэляна»: абарончыя і наступальныя кампаніі, тактыка і стратэгія, партызанская і манеўраная вайна ў лясіста-балоцістай мясцовасці.',
 cf_5:'Вобраз Давыда Гарадзенскага ў хроніках, летапісах і сучасных гістарычных школах. Прычыны <span class="gl" tabindex="0" data-g="compl">кампліментарнасці</span> нямецкіх храністаў (Пётр з Дусбурга) да «бескампраміснага ворага».',
 ft_col:'Гэтая аповесць складзена ў лета 7534 ад стварэння свету (2026), да 700-годдзя памяці Давыда Гарадзенскага. Даты і падрабязнасці прыведзены паводле хронік; частка звестак застаецца спрэчнай.',
-ft_end:'Амінь',ft_top:'Уверх',
+ft_top:'Уверх',
 lb_next:'Далей →',lb_close:'Закрыць'
 };
 
@@ -2096,7 +2097,7 @@ const seal=(ch,id)=>{let s=11;for(const c of id)s=(s*31+c.charCodeAt(0))%2147483
   const SCALE=`<svg class="scales" viewBox="0 0 240 128" aria-hidden="true"><path class="sc-post" d="M116 34 V112 H124 V34 Z M92 118 C96 110 108 108 120 108 C132 108 144 110 148 118 Z"/><circle class="sc-piv" cx="120" cy="30" r="6"/>
     <g class="beam"><path class="sc-bar" d="M30 27.5 H210 V32.5 H30 Z"/><circle class="sc-piv2" cx="120" cy="30" r="2.6"/>
     ${[30,210].map((x,k)=>`<g class="pan p${k}" style="transform-origin:${x}px 30px"><path class="sc-ch" d="M${x} 30 L${x-24} 74 M${x} 30 L${x+24} 74"/><path class="sc-dish" d="M${x-30} 74 H${x+30} C${x+26} 88 ${x+12} 92 ${x} 92 C${x-12} 92 ${x-26} 88 ${x-30} 74 Z"/><g class="coins"></g><text class="sc-pc" x="${x}" y="110" text-anchor="middle"></text></g>`).join('')}</g></svg>`;
-  const VK='dg-votes',mine=(()=>{try{return JSON.parse(ls.get(VK)||'{}')||{}}catch(e){return {}}})(),tally=[null,null,null],snapMine=[null,null,null];let vdb=null,vuid=null,vfail=false,vbusy=Promise.resolve();
+  const VK='dg-votes',mine=(()=>{try{return JSON.parse(ls.get(VK)||'{}')||{}}catch(e){return {}}})(),tally=[null,null,null],snapMine=[null,null,null];let vdb=false,vfail=false,vbusy=Promise.resolve();
   const els=RID.map((r,i)=>{const a=document.createElement('article');a.className='letter';const id='lv'+i;const poll=r.ru[1].length>1;
     a.innerHTML=`<button class="lt-btn" aria-expanded="false" aria-controls="${id}"><span class="lt-flap" aria-hidden="true"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><path d="M0 0 L50 40 L100 0 Z"/></svg></span><span class="lt-seal">${seal('Д','s'+i)}</span><span class="cap">Загадка ${ROM[i]}</span><h3></h3><span class="lt-hint"></span></button><div class="more" id="${id}" role="region"><div><div class="vers">${r.ru[1].map((_,k)=>`<div style="--k:${k}"><span class="cap"></span><h4></h4><p></p></div>`).join('')}</div>${poll?`<div class="poll"><span class="cap pl-q"></span>${SCALE}<div class="pl-btns" role="group">${[0,1].map(k=>`<button class="pl-b" data-v="${k}" aria-pressed="false"><span class="n">${k+1}</span><span class="t"></span></button>`).join('')}</div><p class="pl-note" aria-live="polite"></p></div>`:''}</div></div>`;
     const b=$('.lt-btn',a);b.addEventListener('click',()=>{const o=a.classList.toggle('open');b.setAttribute('aria-expanded',o);paintOne(a,i)});
@@ -2112,8 +2113,11 @@ const seal=(ch,id)=>{let s=11;for(const c of id)s=(s*31+c.charCodeAt(0))%2147483
       :!n?T('Голосов пока нет. Ваш будет первым.','Галасоў пакуль няма. Ваш будзе першым.')
       :`${T('Голосов','Галасоў')}: ${n}${vdb?'':' · '+T('только на этом экране','толькі на гэтым экране')}`};
   const vote=(i,v)=>{if(mine['r'+i]===v)return;mine['r'+i]=v;ls.set(VK,JSON.stringify(mine));paintPoll(i);
-    if(vdb&&vuid){const body={at:Date.now()};[0,1,2].forEach(k=>{if(mine['r'+k]===0||mine['r'+k]===1)body['r'+k]=mine['r'+k]});
-      vbusy=vbusy.then(()=>vdb.doc('votes/'+vuid).set(body)).catch(()=>{vfail=true;paintPoll(i)})}};
+    if(vdb)send(i,v)};
+  /* tally с сервера уже включает голос этого посетителя (snapMine) — paintPoll вычитает его и добавляет текущий */
+  const load=d=>{d.tally.forEach((t,k)=>{tally[k]=t});d.mine.forEach((m,k)=>{snapMine[k]=m});vdb=true;[0,1,2].forEach(paintPoll)};
+  const send=(i,v)=>{vbusy=vbusy.then(()=>api('votes',{visitor,riddle:i,choice:v})).then(load).catch(()=>{vfail=true;paintPoll(i)})};
+  api('votes?visitor='+encodeURIComponent(visitor)).then(d=>{load(d);[0,1,2].forEach(k=>{const m=mine['r'+k];if((m===0||m===1)&&m!==d.mine[k])send(k,m)})}).catch(()=>{});
   const paint=()=>{els.forEach(paintOne);[0,1,2].forEach(paintPoll)};paint();onLang(paint);
 })();
 
@@ -2588,18 +2592,19 @@ onLang(()=>{cloneBase();paintToks();render(false)});
   onLang(()=>{SP=spreads();tabEls.forEach((b,i)=>{b.textContent=SP[i].tab});mode='';build()});
 })();
 
-/* свеча памяти: горит на этом экране */
+/* свеча памяти: общий счёт в базе сервера */
 (()=>{const box=$('#candleBox');if(!box)return;const btn=$('#candleBtn'),msg=$('#candleMsg'),cnt=$('#candleCount');
-  let db=null,uid=null,count=null,mine=ls.get('dg-candle')==='1',failed=false;
+  let online=false,count=null,mine=ls.get('dg-candle')==='1',failed=false;
   const people=n=>{const a=n%10,b=n%100,one=a===1&&b!==11,few=a>=2&&a<=4&&(b<10||b>=20);
     return one?T('человек уже зажёг свечу','чалавек ужо запаліў свечку'):few?T('человека уже зажгли свечу','чалавекі ўжо запалілі свечку'):T('человек уже зажгли свечу','чалавек ужо запалілі свечку')};
   const paint=()=>{box.classList.toggle('lit',mine);btn.hidden=mine;btn.textContent=T('Зажечь свечу','Запаліць свечку');
     msg.textContent=failed?T('Свеча горит на вашем экране. В общий счёт её записать не удалось.','Свечка гарыць на вашым экране. У агульны лік яе запісаць не ўдалося.')
       :mine?T('Ваша свеча горит. Спасибо, что помните.','Ваша свечка гарыць. Дзякуй, што памятаеце.'):T('Зажгите свечу в память о Давиде Городенском.','Запаліце свечку ў памяць пра Давыда Гарадзенскага.');
     if(count!=null){cnt.hidden=false;cnt.innerHTML=count>0?`<b>${count>=1000?'1000+':count}</b>${people(count)}`:T('Станьте первым, кто зажжёт свечу.','Станьце першым, хто запаліць свечку.')}};
+  const light=()=>api('candles',{visitor}).then(d=>{count=d.count;paint()}).catch(()=>{failed=true;paint()});
   paint();onLang(paint);
-  btn.addEventListener('click',async()=>{mine=true;ls.set('dg-candle','1');paint();
-    if(db&&uid){try{await db.doc('candles/'+uid).set({at:Date.now()})}catch(e){failed=true;paint()}}});
+  api('candles?visitor='+encodeURIComponent(visitor)).then(d=>{online=true;count=d.count;if(mine&&!d.mine)light();else paint()}).catch(()=>{});
+  btn.addEventListener('click',()=>{mine=true;ls.set('dg-candle','1');paint();if(online)light()});
 })();
 
 /* испытание */
